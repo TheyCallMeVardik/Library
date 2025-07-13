@@ -1,0 +1,21 @@
+version: '3.8'
+services:
+  elasticsearch:
+    image: bitnami/elasticsearch:latest
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - ELASTICSEARCH_HEAP_SIZE=512m
+    volumes:
+      - elasticsearch_data:/bitnami/elasticsearch/data
+  kibana:
+    image: bitnami/kibana:latest
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+volumes:
+  elasticsearch_data:
