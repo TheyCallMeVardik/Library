@@ -19,7 +19,6 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>()
     .AddEntityFrameworkStores<LibraryDbContext>()
     .AddDefaultTokenProviders();
 
-// Настройка ElasticSearch
 builder.Services.AddSingleton<IElasticClient>(provider =>
 {
     var settings = new ConnectionSettings(new Uri("http://localhost:9200"))

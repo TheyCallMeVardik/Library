@@ -1,11 +1,12 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using Library.Data;
-using Library.Models;
+﻿using Library.Data;
 using Library.DTO;
+using Library.Models;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Nest;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Authorization;
+using Elasticsearch.Net;
+using System.Globalization;
 
 namespace Library.Controllers
 {
@@ -22,20 +23,20 @@ namespace Library.Controllers
             _elasticClient = elasticClient;
         }
 
+        // Получение всех книг
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Books>>> GetBooks()
-        {
-            return await _context.Books.ToListAsync();
-        }
+            => await _context.Books.ToListAsync();
 
+        // Добавление книги
         [HttpPost]
-        [Authorize(Roles = "Admin")] // Только админы могут добавлять книги
+        [Authorize(Roles = "Admin")]
         public async Task<ActionResult<Books>> AddBook(Books book)
         {
             _context.Books.Add(book);
             await _context.SaveChangesAsync();
 
-            var bookSearchDto = new BookSearchDto
+            var dto = new BookSearchDto
             {
                 Id = book.Id,
                 Title = book.Title,
@@ -44,33 +45,112 @@ namespace Library.Controllers
                 PublicationYear = book.PublicationYear
             };
 
-            var indexResponse = await _elasticClient.IndexDocumentAsync(bookSearchDto);
-            if (!indexResponse.IsValid)
-            {
-                return BadRequest(indexResponse.OriginalException.Message);
-            }
+            var response = await _elasticClient.IndexDocumentAsync(dto);
+            if (!response.IsValid)
+                return BadRequest(response.OriginalException?.Message ?? "Ошибка индексации");
 
             return CreatedAtAction(nameof(GetBooks), new { id = book.Id }, book);
         }
 
-        [HttpGet("search")]
-        public async Task<ActionResult<IEnumerable<BookSearchDto>>> SearchBooks(string query)
+        // Обновление книги
+        [HttpPut("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> UpdateBook(int id, Books updatedBook)
         {
-            var searchResponse = await _elasticClient.SearchAsync<BookSearchDto>(s => s
-                .Query(q => q
-                    .MultiMatch(m => m
-                        .Fields(f => f.Field(f => f.Title).Field(f => f.Author).Field(f => f.ISBN))
-                        .Query(query)
+            if (id != updatedBook.Id)
+                return BadRequest("ID mismatch");
+
+            var existing = await _context.Books.FindAsync(id);
+            if (existing == null)
+                return NotFound();
+
+            existing.Title = updatedBook.Title;
+            existing.Author = updatedBook.Author;
+            existing.ISBN = updatedBook.ISBN;
+            existing.PublicationYear = updatedBook.PublicationYear;
+
+            _context.Entry(existing).State = EntityState.Modified;
+            await _context.SaveChangesAsync();
+
+            var dto = new BookSearchDto
+            {
+                Id = existing.Id,
+                Title = existing.Title,
+                Author = existing.Author,
+                ISBN = existing.ISBN,
+                PublicationYear = existing.PublicationYear
+            };
+
+            var response = await _elasticClient.IndexDocumentAsync(dto);
+            if (!response.IsValid)
+                return BadRequest(response.OriginalException?.Message ?? "Ошибка обновления индекса");
+
+            return NoContent();
+        }
+
+        // Удаление книги
+        [HttpDelete("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> DeleteBook(int id)
+        {
+            var book = await _context.Books.FindAsync(id);
+            if (book == null)
+                return NotFound();
+
+            _context.Books.Remove(book);
+            await _context.SaveChangesAsync();
+
+            var response = await _elasticClient.DeleteAsync<BookSearchDto>(id.ToString(), d => d
+                .Index("books")
+                .Refresh(Refresh.True)
+            );
+
+            if (!response.IsValid)
+                return StatusCode(500, response.OriginalException?.Message ?? "Ошибка удаления из индекса");
+
+            return NoContent();
+        }
+
+        // Поиск книг
+        [HttpGet("search")]
+        public async Task<ActionResult<IEnumerable<BookSearchDto>>> SearchBooks(
+    string? query = null,
+    string sortBy = "title",
+    bool ascending = true)
+        {
+            var response = await _elasticClient.SearchAsync<BookSearchDto>(s => s
+                .Index("books")
+                .Query(q =>
+                    string.IsNullOrWhiteSpace(query)
+                    ? q.MatchAll()
+                    : q.Bool(b => b
+                        .Should(
+                            sh => sh.MatchPhrasePrefix(mpp => mpp.Field(f => f.Title).Query(query)),
+                            sh => sh.MatchPhrasePrefix(mpp => mpp.Field(f => f.Author).Query(query))
+                        )
+                        .MinimumShouldMatch(1)
                     )
+                )
+                .Sort(st =>
+                    sortBy.ToLower() == "year"
+                    ? st.Field(f => f.PublicationYear, ascending ? SortOrder.Ascending : SortOrder.Descending)
+                    : st.Field("title.keyword", ascending ? SortOrder.Ascending : SortOrder.Descending)
                 )
             );
 
-            if (!searchResponse.IsValid)
+            if (!response.IsValid)
             {
-                return BadRequest(searchResponse.OriginalException.Message);
+                return BadRequest(new
+                {
+                    response.ServerError?.Error?.Type,
+                    response.ServerError?.Error?.Reason,
+                    response.ServerError?.Error?.CausedBy
+                });
             }
 
-            return Ok(searchResponse.Documents);
+            return Ok(response.Documents);
         }
+
+
     }
 }
