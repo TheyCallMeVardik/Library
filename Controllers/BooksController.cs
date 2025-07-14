@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Nest;
 using Elasticsearch.Net;
-using System.Globalization;
+using System.Security.Claims;
 
 namespace Library.Controllers
 {
@@ -42,7 +42,8 @@ namespace Library.Controllers
                 Title = book.Title,
                 Author = book.Author,
                 ISBN = book.ISBN,
-                PublicationYear = book.PublicationYear
+                PublicationYear = book.PublicationYear,
+                IsAvailable = book.IsAvailable
             };
 
             var response = await _elasticClient.IndexDocumentAsync(dto);
@@ -50,6 +51,35 @@ namespace Library.Controllers
                 return BadRequest(response.OriginalException?.Message ?? "Ошибка индексации");
 
             return CreatedAtAction(nameof(GetBooks), new { id = book.Id }, book);
+        }
+
+        [HttpPost("bulk")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> AddBooksBulk([FromBody] List<Books> books)
+        {
+            if (books == null || !books.Any())
+                return BadRequest("No books provided");
+
+            _context.Books.AddRange(books);
+            await _context.SaveChangesAsync();
+
+            foreach (var book in books)
+            {
+                var dto = new BookSearchDto
+                {
+                    Id = book.Id,
+                    Title = book.Title,
+                    Author = book.Author,
+                    ISBN = book.ISBN,
+                    PublicationYear = book.PublicationYear,
+                    IsAvailable = book.IsAvailable
+                };
+                var response = await _elasticClient.IndexDocumentAsync(dto);
+                if (!response.IsValid)
+                    return StatusCode(500, $"Ошибка индексации для книги {book.Title}: {response.OriginalException?.Message}");
+            }
+
+            return CreatedAtAction(nameof(GetBooks), new { }, books);
         }
 
         // Обновление книги
@@ -68,6 +98,7 @@ namespace Library.Controllers
             existing.Author = updatedBook.Author;
             existing.ISBN = updatedBook.ISBN;
             existing.PublicationYear = updatedBook.PublicationYear;
+            existing.IsAvailable = updatedBook.IsAvailable;
 
             _context.Entry(existing).State = EntityState.Modified;
             await _context.SaveChangesAsync();
@@ -78,7 +109,8 @@ namespace Library.Controllers
                 Title = existing.Title,
                 Author = existing.Author,
                 ISBN = existing.ISBN,
-                PublicationYear = existing.PublicationYear
+                PublicationYear = existing.PublicationYear,
+                IsAvailable = existing.IsAvailable
             };
 
             var response = await _elasticClient.IndexDocumentAsync(dto);
@@ -107,6 +139,28 @@ namespace Library.Controllers
 
             if (!response.IsValid)
                 return StatusCode(500, response.OriginalException?.Message ?? "Ошибка удаления из индекса");
+
+            return NoContent();
+        }
+
+        [HttpDelete]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> DeleteAllBooks()
+        {
+            var books = await _context.Books.ToListAsync();
+            if (!books.Any()) return NoContent();
+
+            _context.Books.RemoveRange(books);
+            await _context.SaveChangesAsync();
+
+            var deleteResponse = await _elasticClient.DeleteByQueryAsync<BookSearchDto>(d => d
+                .Index("books")
+                .Query(q => q.MatchAll())
+                .Refresh(true)
+            );
+
+            if (!deleteResponse.IsValid)
+                return StatusCode(500, deleteResponse.OriginalException?.Message ?? "Ошибка массового удаления из индекса");
 
             return NoContent();
         }
@@ -150,7 +204,43 @@ namespace Library.Controllers
 
             return Ok(response.Documents);
         }
+        [HttpPost("purchase")]
+        [Authorize]
+        public async Task<ActionResult<Order>> PurchaseBook(int bookId)
+        {
+            var book = await _context.Books.FindAsync(bookId);
+            if (book == null) return NotFound("Book not found");
+            if (!book.IsAvailable) return BadRequest("Book is not available");
 
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(userId)) return Unauthorized();
+
+            var order = new Order
+            {
+                BookId = bookId,
+                UserId = userId,
+                OrderDate = DateTime.UtcNow
+            };
+
+            _context.Orders.Add(order);
+            book.IsAvailable = false; 
+            await _context.SaveChangesAsync();
+
+            var dto = new BookSearchDto
+            {
+                Id = book.Id,
+                Title = book.Title,
+                Author = book.Author,
+                ISBN = book.ISBN,
+                PublicationYear = book.PublicationYear,
+                IsAvailable = book.IsAvailable 
+            };
+            var indexResponse = await _elasticClient.IndexDocumentAsync(dto);
+            if (!indexResponse.IsValid)
+                return StatusCode(500, "Ошибка обновления индекса");
+
+            return CreatedAtAction(nameof(PurchaseBook), new { id = order.Id }, order);
+        }
 
     }
 }

@@ -6,10 +6,18 @@ namespace Library.Data
 {
     public class LibraryDbContext : IdentityDbContext<ApplicationUser>
     {
-        public LibraryDbContext(DbContextOptions<LibraryDbContext> options) : base(options)
+        public DbSet<Models.Books> Books { get; set; }
+        public DbSet<Models.Order> Orders { get; set; }
+
+        public LibraryDbContext(DbContextOptions<LibraryDbContext> options)
+            : base(options)
         {
         }
 
-        public DbSet<Books> Books { get; set; }
+        protected override void OnModelCreating(ModelBuilder builder)
+        {
+            base.OnModelCreating(builder);
+            Configurations.DatabaseConfiguration.Configure(builder); 
+        }
     }
 }
