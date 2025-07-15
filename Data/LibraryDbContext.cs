@@ -7,8 +7,7 @@ namespace Library.Data
     public class LibraryDbContext : IdentityDbContext<ApplicationUser>
     {
         public DbSet<Models.Books> Books { get; set; }
-        public DbSet<Models.Order> Orders { get; set; }
-
+        public DbSet<Models.UserBook> UserBooks { get; set; }
         public LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             : base(options)
         {

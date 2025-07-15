@@ -13,23 +13,24 @@ namespace Library.Configurations
                 entity.Property(e => e.Title).IsRequired().HasMaxLength(255);
                 entity.Property(e => e.Author).IsRequired().HasMaxLength(255);
                 entity.Property(e => e.PublicationYear).IsRequired();
-                entity.Property(e => e.IsAvailable).HasDefaultValue(true);
                 entity.Property(e => e.Price).HasColumnType("decimal(10,2)");
             });
-
-            builder.Entity<Models.Order>(entity =>
+            builder.Entity<Models.UserBook>(entity =>
             {
-                entity.ToTable("Orders");
-                entity.HasKey(e => e.Id);
-                entity.HasOne(e => e.Book)
-                    .WithMany()
-                    .HasForeignKey(e => e.BookId)
+                entity.ToTable("UserBooks");
+                entity.HasKey(ub => ub.Id);
+                entity.HasIndex(ub => new { ub.UserId, ub.BookId }).IsUnique(); 
+                entity.Property(ub => ub.PurchaseDate).IsRequired();
+
+                entity.HasOne(ub => ub.Book)
+                    .WithMany() 
+                    .HasForeignKey(ub => ub.BookId)
                     .OnDelete(DeleteBehavior.Restrict);
-                entity.HasOne(e => e.User)
-                    .WithMany()
-                    .HasForeignKey(e => e.UserId)
+
+                entity.HasOne(ub => ub.ApplicationUser)
+                    .WithMany() 
+                    .HasForeignKey(ub => ub.UserId)
                     .OnDelete(DeleteBehavior.Restrict);
-                entity.Property(e => e.OrderDate).IsRequired();
             });
         }
     }

@@ -3,6 +3,7 @@ using System;
 using Library.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Library.Migrations
 {
     [DbContext(typeof(LibraryDbContext))]
-    partial class LibraryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250714161757_DeleteIsAvailableFromBooks")]
+    partial class DeleteIsAvailableFromBooks
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -130,7 +133,7 @@ namespace Library.Migrations
                     b.ToTable("Books", (string)null);
                 });
 
-            modelBuilder.Entity("Library.Models.UserBook", b =>
+            modelBuilder.Entity("Library.Models.Order", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -141,7 +144,7 @@ namespace Library.Migrations
                     b.Property<int>("BookId")
                         .HasColumnType("integer");
 
-                    b.Property<DateTime>("PurchaseDate")
+                    b.Property<DateTime>("OrderDate")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("UserId")
@@ -152,10 +155,9 @@ namespace Library.Migrations
 
                     b.HasIndex("BookId");
 
-                    b.HasIndex("UserId", "BookId")
-                        .IsUnique();
+                    b.HasIndex("UserId");
 
-                    b.ToTable("UserBooks", (string)null);
+                    b.ToTable("Orders", (string)null);
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>
@@ -290,7 +292,7 @@ namespace Library.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
-            modelBuilder.Entity("Library.Models.UserBook", b =>
+            modelBuilder.Entity("Library.Models.Order", b =>
                 {
                     b.HasOne("Library.Models.Books", "Book")
                         .WithMany()
@@ -298,15 +300,15 @@ namespace Library.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("Library.Models.ApplicationUser", "ApplicationUser")
+                    b.HasOne("Library.Models.ApplicationUser", "User")
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.Navigation("ApplicationUser");
-
                     b.Navigation("Book");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>

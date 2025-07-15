@@ -43,7 +43,6 @@ namespace Library.Controllers
                 Author = book.Author,
                 ISBN = book.ISBN,
                 PublicationYear = book.PublicationYear,
-                IsAvailable = book.IsAvailable
             };
 
             var response = await _elasticClient.IndexDocumentAsync(dto);
@@ -72,7 +71,6 @@ namespace Library.Controllers
                     Author = book.Author,
                     ISBN = book.ISBN,
                     PublicationYear = book.PublicationYear,
-                    IsAvailable = book.IsAvailable
                 };
                 var response = await _elasticClient.IndexDocumentAsync(dto);
                 if (!response.IsValid)
@@ -98,7 +96,6 @@ namespace Library.Controllers
             existing.Author = updatedBook.Author;
             existing.ISBN = updatedBook.ISBN;
             existing.PublicationYear = updatedBook.PublicationYear;
-            existing.IsAvailable = updatedBook.IsAvailable;
 
             _context.Entry(existing).State = EntityState.Modified;
             await _context.SaveChangesAsync();
@@ -110,7 +107,6 @@ namespace Library.Controllers
                 Author = existing.Author,
                 ISBN = existing.ISBN,
                 PublicationYear = existing.PublicationYear,
-                IsAvailable = existing.IsAvailable
             };
 
             var response = await _elasticClient.IndexDocumentAsync(dto);
@@ -167,10 +163,7 @@ namespace Library.Controllers
 
         // Поиск книг
         [HttpGet("search")]
-        public async Task<ActionResult<IEnumerable<BookSearchDto>>> SearchBooks(
-    string? query = null,
-    string sortBy = "title",
-    bool ascending = true)
+        public async Task<ActionResult<IEnumerable<BookSearchDto>>> SearchBooks(string? query = null)
         {
             var response = await _elasticClient.SearchAsync<BookSearchDto>(s => s
                 .Index("books")
@@ -184,11 +177,6 @@ namespace Library.Controllers
                         )
                         .MinimumShouldMatch(1)
                     )
-                )
-                .Sort(st =>
-                    sortBy.ToLower() == "year"
-                    ? st.Field(f => f.PublicationYear, ascending ? SortOrder.Ascending : SortOrder.Descending)
-                    : st.Field("title.keyword", ascending ? SortOrder.Ascending : SortOrder.Descending)
                 )
             );
 
@@ -206,24 +194,26 @@ namespace Library.Controllers
         }
         [HttpPost("purchase")]
         [Authorize]
-        public async Task<ActionResult<Order>> PurchaseBook(int bookId)
+        public async Task<ActionResult<UserBook>> PurchaseBook(int bookId)
         {
             var book = await _context.Books.FindAsync(bookId);
             if (book == null) return NotFound("Book not found");
-            if (!book.IsAvailable) return BadRequest("Book is not available");
 
             var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (string.IsNullOrEmpty(userId)) return Unauthorized();
 
-            var order = new Order
+            var existingPurchase = await _context.UserBooks
+                .FirstOrDefaultAsync(ub => ub.UserId == userId && ub.BookId == bookId);
+            if (existingPurchase != null) return BadRequest("Book already purchased");
+
+            var userBook = new UserBook
             {
-                BookId = bookId,
                 UserId = userId,
-                OrderDate = DateTime.UtcNow
+                BookId = bookId,
+                PurchaseDate = DateTime.UtcNow
             };
 
-            _context.Orders.Add(order);
-            book.IsAvailable = false; 
+            _context.UserBooks.Add(userBook);
             await _context.SaveChangesAsync();
 
             var dto = new BookSearchDto
@@ -232,15 +222,27 @@ namespace Library.Controllers
                 Title = book.Title,
                 Author = book.Author,
                 ISBN = book.ISBN,
-                PublicationYear = book.PublicationYear,
-                IsAvailable = book.IsAvailable 
+                PublicationYear = book.PublicationYear
             };
             var indexResponse = await _elasticClient.IndexDocumentAsync(dto);
             if (!indexResponse.IsValid)
                 return StatusCode(500, "Ошибка обновления индекса");
 
-            return CreatedAtAction(nameof(PurchaseBook), new { id = order.Id }, order);
+            return CreatedAtAction(nameof(PurchaseBook), new { id = userBook.Id }, userBook);
         }
 
+        [HttpGet("my-books")]
+        [Authorize]
+        public async Task<ActionResult<IEnumerable<UserBook>>> GetMyBooks()
+        {
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(userId)) return Unauthorized();
+
+            var userBooks = await _context.UserBooks
+                .Where(ub => ub.UserId == userId)
+                .Include(ub => ub.Book)
+                .ToListAsync();
+            return Ok(userBooks);
+        }
     }
 }
