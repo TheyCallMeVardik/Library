@@ -5,8 +5,9 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Nest;
-using Elasticsearch.Net;
 using System.Security.Claims;
+using Elasticsearch.Net;
+using Elastic.Clients.Elasticsearch.Fluent;
 
 namespace Library.Controllers
 {
@@ -23,12 +24,10 @@ namespace Library.Controllers
             _elasticClient = elasticClient;
         }
 
-        // Получение всех книг
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Books>>> GetBooks()
             => await _context.Books.ToListAsync();
 
-        // Добавление книги
         [HttpPost]
         [Authorize(Roles = "Admin")]
         public async Task<ActionResult<Books>> AddBook(Books book)
@@ -41,8 +40,10 @@ namespace Library.Controllers
                 Id = book.Id,
                 Title = book.Title,
                 Author = book.Author,
-                ISBN = book.ISBN,
+                isbn = book.isbn,
                 PublicationYear = book.PublicationYear,
+                ImageUrl = book.ImageUrl,
+                Description = book.Description
             };
 
             var response = await _elasticClient.IndexDocumentAsync(dto);
@@ -62,25 +63,30 @@ namespace Library.Controllers
             _context.Books.AddRange(books);
             await _context.SaveChangesAsync();
 
-            foreach (var book in books)
+            var dtos = books.Select(book => new BookSearchDto
             {
-                var dto = new BookSearchDto
-                {
-                    Id = book.Id,
-                    Title = book.Title,
-                    Author = book.Author,
-                    ISBN = book.ISBN,
-                    PublicationYear = book.PublicationYear,
-                };
-                var response = await _elasticClient.IndexDocumentAsync(dto);
-                if (!response.IsValid)
-                    return StatusCode(500, $"Ошибка индексации для книги {book.Title}: {response.OriginalException?.Message}");
-            }
+                Id = book.Id,
+                Title = book.Title,
+                Author = book.Author,
+                isbn = book.isbn,
+                PublicationYear = book.PublicationYear,
+                ImageUrl = book.ImageUrl,
+                Description = book.Description
+            }).ToList();
+
+            var bulkResponse = await _elasticClient.BulkAsync(b => b
+                .Index("books")
+                .IndexMany(dtos)
+                .Refresh(Refresh.True)
+            );
+
+            var itemsWithErrors = bulkResponse.Items
+                .Where(i => i.Status >= 400 || i.Error != null)
+                .ToList();
 
             return CreatedAtAction(nameof(GetBooks), new { }, books);
         }
 
-        // Обновление книги
         [HttpPut("{id}")]
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> UpdateBook(int id, Books updatedBook)
@@ -94,8 +100,10 @@ namespace Library.Controllers
 
             existing.Title = updatedBook.Title;
             existing.Author = updatedBook.Author;
-            existing.ISBN = updatedBook.ISBN;
+            existing.isbn = updatedBook.isbn;
             existing.PublicationYear = updatedBook.PublicationYear;
+            existing.ImageUrl = updatedBook.ImageUrl;
+            existing.Description = updatedBook.Description;
 
             _context.Entry(existing).State = EntityState.Modified;
             await _context.SaveChangesAsync();
@@ -105,8 +113,10 @@ namespace Library.Controllers
                 Id = existing.Id,
                 Title = existing.Title,
                 Author = existing.Author,
-                ISBN = existing.ISBN,
+                isbn = existing.isbn,
                 PublicationYear = existing.PublicationYear,
+                ImageUrl = existing.ImageUrl,
+                Description = existing.Description,
             };
 
             var response = await _elasticClient.IndexDocumentAsync(dto);
@@ -116,7 +126,6 @@ namespace Library.Controllers
             return NoContent();
         }
 
-        // Удаление книги
         [HttpDelete("{id}")]
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> DeleteBook(int id)
@@ -161,7 +170,6 @@ namespace Library.Controllers
             return NoContent();
         }
 
-        // Поиск книг
         [HttpGet("search")]
         public async Task<ActionResult<IEnumerable<BookSearchDto>>> SearchBooks(string? query = null)
         {
@@ -192,6 +200,7 @@ namespace Library.Controllers
 
             return Ok(response.Documents);
         }
+
         [HttpPost("purchase")]
         [Authorize]
         public async Task<ActionResult<UserBook>> PurchaseBook(int bookId)
@@ -221,9 +230,12 @@ namespace Library.Controllers
                 Id = book.Id,
                 Title = book.Title,
                 Author = book.Author,
-                ISBN = book.ISBN,
-                PublicationYear = book.PublicationYear
+                isbn = book.isbn,
+                PublicationYear = book.PublicationYear,
+                ImageUrl = book.ImageUrl,
+                Description = book.Description
             };
+
             var indexResponse = await _elasticClient.IndexDocumentAsync(dto);
             if (!indexResponse.IsValid)
                 return StatusCode(500, "Ошибка обновления индекса");
@@ -242,6 +254,7 @@ namespace Library.Controllers
                 .Where(ub => ub.UserId == userId)
                 .Include(ub => ub.Book)
                 .ToListAsync();
+
             return Ok(userBooks);
         }
     }
